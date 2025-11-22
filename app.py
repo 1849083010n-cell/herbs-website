@@ -6,14 +6,14 @@ import itertools
 
 # 页面配置
 st.set_page_config(
-    page_title="中医方剂药材共现查询系统",
+    page_title="中医方剂查询系统",
     page_icon="🌿",
     layout="wide"
 )
 
 # 标题
-st.title("🌿 中医方剂药材共现权重查询系统")
-st.markdown("基于方剂内药材共现关系的智能推荐")
+st.title("🌿 中医方剂药材查询系统")
+st.markdown("基于器官-主症-方剂-药材的层级查询")
 
 # 读取CSV数据
 @st.cache_data
@@ -30,335 +30,333 @@ def load_syndrome_data():
         st.error(f"数据加载失败: {e}")
         return None
 
-# 从方剂数据构建共现矩阵
-@st.cache_data
-def build_cooccurrence_matrix(syndrome_df):
-    """
-    从所有方剂中构建药材共现矩阵
-    """
-    cooccurrence_dict = defaultdict(lambda: defaultdict(int))
-    all_herbs = set()
-    
-    # 收集所有药材列
-    herb_columns = []
-    for col in syndrome_df.columns:
-        if any(keyword in col for keyword in ['药材', 'Herb', 'herb']):
-            herb_columns.append(col)
-    
-    # 如果没有检测到药材列，使用默认模式
-    if not herb_columns:
-        herb_columns = [f'药材{i}' for i in range(1, 5)]
-    
-    st.sidebar.info(f"检测到的药材列: {herb_columns}")
-    
-    # 遍历每一行（每个证型）
-    for _, row in syndrome_df.iterrows():
-        # 收集该证型的所有药材
-        current_herbs = []
-        
-        for herb_col in herb_columns:
-            if herb_col in row and pd.notna(row[herb_col]):
-                herbs_text = str(row[herb_col])
-                # 解析药材
-                if '、' in herbs_text:
-                    herbs = [herb.strip() for herb in herbs_text.split('、') if herb.strip()]
-                elif ',' in herbs_text:
-                    herbs = [herb.strip() for herb in herbs_text.split(',') if herb.strip()]
-                else:
-                    herbs = [herbs_text.strip()]
-                
-                current_herbs.extend(herbs)
-                all_herbs.update(herbs)
-        
-        # 计算该方剂内药材的共现关系
-        if len(current_herbs) > 1:
-            for herb1, herb2 in itertools.combinations(set(current_herbs), 2):
-                cooccurrence_dict[herb1][herb2] += 1
-                cooccurrence_dict[herb2][herb1] += 1
-    
-    return dict(cooccurrence_dict), all_herbs
-
 # 加载数据
 syndrome_df = load_syndrome_data()
 
 if syndrome_df is None:
     st.stop()
 
-# 构建共现矩阵
-with st.spinner("正在构建药材共现矩阵..."):
-    cooccurrence_dict, all_herbs = build_cooccurrence_matrix(syndrome_df)
+# 显示数据列名用于调试
+st.sidebar.info(f"数据列名: {list(syndrome_df.columns)}")
 
-st.success(f"✅ 数据加载成功！共分析 {len(syndrome_df)} 个证型，发现 {len(all_herbs)} 种药材")
-
-# 自动检测列名
-def detect_column_names(df, possible_names):
-    for name in possible_names:
+# 自动检测列名函数
+def detect_columns(df):
+    """自动检测各种列名"""
+    columns_info = {}
+    
+    # 检测器官列
+    for name in ['器官', 'Organ', 'organ', '脏器']:
         if name in df.columns:
-            return name
-    return df.columns[0] if len(df.columns) > 0 else None
+            columns_info['organ'] = name
+            break
+    else:
+        columns_info['organ'] = df.columns[0] if len(df.columns) > 0 else None
+    
+    # 检测主症列
+    for name in ['主症', '症状', 'Symptom', 'symptom', '证型']:
+        if name in df.columns:
+            columns_info['symptom'] = name
+            break
+    else:
+        columns_info['symptom'] = df.columns[1] if len(df.columns) > 1 else None
+    
+    # 检测八纲辨证列
+    for name in ['表里', '表里辨证', 'Exterior_Interior']:
+        if name in df.columns:
+            columns_info['exterior_interior'] = name
+            break
+    
+    for name in ['寒热', '寒热辨证', 'Cold_Heat']:
+        if name in df.columns:
+            columns_info['cold_heat'] = name
+            break
+    
+    for name in ['虚实', '虚实辨证', 'Deficiency_Excess']:
+        if name in df.columns:
+            columns_info['deficiency_excess'] = name
+            break
+    
+    # 检测病机和治疗原则
+    for name in ['病机', 'Pathogenesis', '病机分析']:
+        if name in df.columns:
+            columns_info['pathogenesis'] = name
+            break
+    
+    for name in ['治疗原则', 'Treatment_Principle']:
+        if name in df.columns:
+            columns_info['treatment_principle'] = name
+            break
+    
+    # 检测药材和来源列
+    columns_info['herb_columns'] = []
+    columns_info['source_columns'] = []
+    
+    # 检测药材列（药材1, 药材2, 药材3...）
+    for i in range(1, 6):  # 检查最多5个药材列
+        for pattern in [f'药材{i}', f'Herb{i}', f'herb{i}']:
+            if pattern in df.columns:
+                columns_info['herb_columns'].append(pattern)
+                break
+        else:
+            # 如果没有找到标准格式，尝试其他模式
+            for col in df.columns:
+                if '药材' in col and str(i) in col:
+                    columns_info['herb_columns'].append(col)
+                    break
+    
+    # 检测来源列（来源1, 来源2, 来源3...）
+    for i in range(1, 6):  # 检查最多5个来源列
+        for pattern in [f'来源{i}', f'Source{i}', f'source{i}']:
+            if pattern in df.columns:
+                columns_info['source_columns'].append(pattern)
+                break
+        else:
+            # 如果没有找到标准格式，尝试其他模式
+            for col in df.columns:
+                if '来源' in col and str(i) in col:
+                    columns_info['source_columns'].append(col)
+                    break
+    
+    # 如果自动检测失败，使用默认列名
+    if not columns_info['herb_columns']:
+        columns_info['herb_columns'] = [f'药材{i}' for i in range(1, 4)]
+    if not columns_info['source_columns']:
+        columns_info['source_columns'] = [f'来源{i}' for i in range(1, 4)]
+    
+    return columns_info
 
-organ_col = detect_column_names(syndrome_df, ['器官', 'Organ', 'organ', '脏器'])
-symptom_col = detect_column_names(syndrome_df, ['主症', '症状', 'Symptom', 'symptom', '证型'])
-exterior_interior_col = detect_column_names(syndrome_df, ['表里', '表里辨证', 'Exterior_Interior'])
-cold_heat_col = detect_column_names(syndrome_df, ['寒热', '寒热辨证', 'Cold_Heat'])
-deficiency_excess_col = detect_column_names(syndrome_df, ['虚实', '虚实辨证', 'Deficiency_Excess'])
-pathogenesis_col = detect_column_names(syndrome_df, ['病机', 'Pathogenesis', '病机分析'])
-treatment_principle_col = detect_column_names(syndrome_df, ['治疗原则', '治疗原则', 'Treatment_Principle'])
+# 检测列名
+columns_info = detect_columns(syndrome_df)
+
+# 显示检测结果
+st.sidebar.success(f"器官列: {columns_info['organ']}")
+st.sidebar.success(f"主症列: {columns_info['symptom']}")
+st.sidebar.success(f"药材列: {columns_info['herb_columns']}")
+st.sidebar.success(f"来源列: {columns_info['source_columns']}")
+
+# 解析药材文本
+def parse_herbs(herbs_text):
+    """解析药材文本，支持多种分隔符"""
+    if pd.isna(herbs_text):
+        return []
+    
+    herbs_text = str(herbs_text).strip()
+    if not herbs_text:
+        return []
+    
+    # 尝试不同的分隔符
+    if '、' in herbs_text:
+        herbs = [herb.strip() for herb in herbs_text.split('、') if herb.strip()]
+    elif ',' in herbs_text:
+        herbs = [herb.strip() for herb in herbs_text.split(',') if herb.strip()]
+    elif '，' in herbs_text:
+        herbs = [herb.strip() for herb in herbs_text.split('，') if herb.strip()]
+    else:
+        herbs = [herbs_text.strip()]
+    
+    return herbs
+
+# 构建查询数据结构
+def build_query_structure(df, columns_info):
+    """构建器官-主症-来源-药材的查询结构"""
+    query_structure = {}
+    
+    for _, row in df.iterrows():
+        organ = row[columns_info['organ']]
+        symptom = row[columns_info['symptom']]
+        
+        if pd.isna(organ) or pd.isna(symptom):
+            continue
+        
+        # 初始化器官
+        if organ not in query_structure:
+            query_structure[organ] = {}
+        
+        # 初始化主症
+        if symptom not in query_structure[organ]:
+            query_structure[organ][symptom] = {
+                'exterior_interior': row.get(columns_info.get('exterior_interior'), ''),
+                'cold_heat': row.get(columns_info.get('cold_heat'), ''),
+                'deficiency_excess': row.get(columns_info.get('deficiency_excess'), ''),
+                'pathogenesis': row.get(columns_info.get('pathogenesis'), ''),
+                'treatment_principle': row.get(columns_info.get('treatment_principle'), ''),
+                'prescriptions': []
+            }
+        
+        # 添加方剂信息
+        prescriptions = []
+        for i, (herb_col, source_col) in enumerate(zip(columns_info['herb_columns'], columns_info['source_columns'])):
+            if herb_col in row and pd.notna(row[herb_col]):
+                herbs = parse_herbs(row[herb_col])
+                source = row[source_col] if source_col in row and pd.notna(row.get(source_col)) else f"方剂{i+1}"
+                
+                if herbs:  # 只有有药材时才添加
+                    prescriptions.append({
+                        'source': source,
+                        'herbs': herbs
+                    })
+        
+        # 合并相同主症的方剂信息
+        query_structure[organ][symptom]['prescriptions'].extend(prescriptions)
+    
+    return query_structure
+
+# 构建查询结构
+query_structure = build_query_structure(syndrome_df, columns_info)
+
+st.success(f"✅ 数据加载成功！共 {len(query_structure)} 个器官，{sum(len(symptoms) for symptoms in query_structure.values())} 个主症")
 
 # 侧边栏 - 查询条件
 st.sidebar.header("🔍 查询条件")
 
 # 器官选择
-try:
-    organs = syndrome_df[organ_col].unique()
-    selected_organ = st.sidebar.selectbox("选择器官", organs)
-except KeyError as e:
-    st.error(f"找不到器官列，可用列: {list(syndrome_df.columns)}")
-    st.stop()
-
-# 根据器官筛选主症
-organ_syndromes = syndrome_df[syndrome_df[organ_col] == selected_organ]
-main_symptoms = organ_syndromes[symptom_col].unique()
-
-# 症状输入
-symptom_input = st.sidebar.text_input("输入症状关键词", placeholder="例如：咳嗽、黄痰、发热")
+organs = list(query_structure.keys())
+selected_organ = st.sidebar.selectbox("选择器官", organs)
 
 # 主症选择
-if symptom_input:
-    matched_syndromes = []
-    for syndrome in main_symptoms:
-        if pd.notna(syndrome) and any(keyword in str(syndrome) for keyword in symptom_input.split()):
-            matched_syndromes.append(syndrome)
-    
-    if matched_syndromes:
-        selected_symptom = st.sidebar.selectbox("匹配到的主症", matched_syndromes)
+if selected_organ in query_structure:
+    symptoms = list(query_structure[selected_organ].keys())
+    selected_symptom = st.sidebar.selectbox("选择主症", symptoms)
+else:
+    selected_symptom = None
+
+# 症状关键词搜索
+symptom_search = st.sidebar.text_input("搜索症状关键词", placeholder="输入症状关键词进行过滤")
+
+if symptom_search:
+    filtered_symptoms = [symptom for symptom in symptoms if symptom_search in str(symptom)]
+    if filtered_symptoms:
+        selected_symptom = st.sidebar.selectbox("匹配到的主症", filtered_symptoms)
     else:
-        selected_symptom = st.sidebar.selectbox("选择主症", main_symptoms)
-else:
-    selected_symptom = st.sidebar.selectbox("选择主症", main_symptoms)
+        st.sidebar.warning("未找到匹配的主症")
 
-# 查询按钮
-if st.sidebar.button("🔎 查询方剂", type="primary"):
-    matched_prescriptions = organ_syndromes[organ_syndromes[symptom_col] == selected_symptom]
+# 查询结果显示
+if selected_organ and selected_symptom:
+    symptom_info = query_structure[selected_organ][selected_symptom]
     
-    if not matched_prescriptions.empty:
-        st.header(f"📋 查询结果：{selected_organ} - {selected_symptom}")
-        
-        # 显示八纲辨证信息
-        syndrome_info = matched_prescriptions.iloc[0]
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            if exterior_interior_col in syndrome_info:
-                st.metric("表里", syndrome_info[exterior_interior_col])
-        
-        with col2:
-            if cold_heat_col in syndrome_info:
-                st.metric("寒热", syndrome_info[cold_heat_col])
-        
-        with col3:
-            if deficiency_excess_col in syndrome_info:
-                st.metric("虚实", syndrome_info[deficiency_excess_col])
-        
-        with col4:
-            if pathogenesis_col in syndrome_info:
-                st.metric("病机", syndrome_info[pathogenesis_col])
-        
-        if treatment_principle_col in syndrome_info:
-            st.markdown(f"**治疗原则：** {syndrome_info[treatment_principle_col]}")
-        
-        # 显示方剂和药材
-        st.subheader("💊 推荐方剂及药材")
-        
-        # 检测药材列
-        herb_columns = []
-        source_columns = []
-        
-        for col in syndrome_df.columns:
-            if any(keyword in col for keyword in ['药材', 'Herb', 'herb']):
-                herb_columns.append(col)
-            elif any(keyword in col for keyword in ['来源', 'Source', '方剂']):
-                source_columns.append(col)
-        
-        if not herb_columns:
-            herb_columns = [f'药材{i}' for i in range(1, 5)]
-        if not source_columns:
-            source_columns = [f'来源{i}' for i in range(1, 5)]
-        
-        # 遍历所有方剂
-        prescription_count = 0
-        for i, (herb_col, source_col) in enumerate(zip(herb_columns, source_columns)):
-            if herb_col in syndrome_info and pd.notna(syndrome_info[herb_col]):
-                prescription_count += 1
+    st.header(f"📋 查询结果：{selected_organ} - {selected_symptom}")
+    
+    # 显示辨证信息
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if symptom_info['exterior_interior']:
+            st.metric("表里", symptom_info['exterior_interior'])
+        if symptom_info['cold_heat']:
+            st.metric("寒热", symptom_info['cold_heat'])
+    
+    with col2:
+        if symptom_info['deficiency_excess']:
+            st.metric("虚实", symptom_info['deficiency_excess'])
+        if symptom_info['pathogenesis']:
+            st.metric("病机", symptom_info['pathogenesis'])
+    
+    with col3:
+        if symptom_info['treatment_principle']:
+            st.markdown("**治疗原则**")
+            st.info(symptom_info['treatment_principle'])
+    
+    # 显示方剂信息
+    st.subheader("💊 推荐方剂")
+    
+    if symptom_info['prescriptions']:
+        for i, prescription in enumerate(symptom_info['prescriptions']):
+            with st.expander(f"方剂 {i+1}: {prescription['source']}", expanded=True):
+                # 显示药材列表
+                st.markdown("**组成药材:**")
+                for j, herb in enumerate(prescription['herbs']):
+                    st.write(f"- {herb}")
                 
-                source_name = syndrome_info[source_col] if source_col in syndrome_info and pd.notna(syndrome_info.get(source_col)) else f"方剂 {prescription_count}"
+                # 药材统计
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("药材数量", len(prescription['herbs']))
+                with col2:
+                    unique_herbs = len(set(prescription['herbs']))
+                    st.metric("独特药材", unique_herbs)
                 
-                with st.expander(f"方剂 {prescription_count}: {source_name}", expanded=True):
-                    herbs_text = str(syndrome_info[herb_col])
-                    
-                    # 解析药材
-                    herbs = []
-                    if '、' in herbs_text:
-                        herbs = [herb.strip() for herb in herbs_text.split('、') if herb.strip()]
-                    elif ',' in herbs_text:
-                        herbs = [herb.strip() for herb in herbs_text.split(',') if herb.strip()]
-                    else:
-                        herbs = [herbs_text.strip()]
-                    
-                    # 计算共现权重
-                    herb_weights = []
-                    for herb in herbs:
-                        if herb in cooccurrence_dict:
-                            # 计算该药材与其他药材的共现次数
-                            other_herbs = [h for h in herbs if h != herb]
-                            if other_herbs:
-                                cooccur_values = [cooccurrence_dict[herb].get(other, 0) for other in other_herbs]
-                                avg_cooccur = np.mean(cooccur_values) if cooccur_values else 0
-                                total_cooccur = sum(cooccur_values)
-                                max_cooccur = max(cooccur_values) if cooccur_values else 0
-                            else:
-                                avg_cooccur = 0
-                                total_cooccur = 0
-                                max_cooccur = 0
-                            
-                            herb_weights.append({
-                                '药材': herb,
-                                '平均共现': round(avg_cooccur, 2),
-                                '总共现': total_cooccur,
-                                '最大共现': max_cooccur,
-                                '出现频次': herbs.count(herb)
-                            })
-                        else:
-                            herb_weights.append({
-                                '药材': herb,
-                                '平均共现': 0,
-                                '总共现': 0,
-                                '最大共现': 0,
-                                '出现频次': herbs.count(herb),
-                                '备注': '新药材'
-                            })
-                    
-                    # 排序
-                    herb_weights.sort(key=lambda x: x['总共现'], reverse=True)
-                    
-                    # 显示表格
-                    if herb_weights:
-                        weights_df = pd.DataFrame(herb_weights)
-                        
-                        column_config = {
-                            "药材": "药材名称",
-                            "平均共现": st.column_config.NumberColumn(
-                                "平均共现权重",
-                                help="与该方剂中其他药材的平均共现次数",
-                                format="%.2f"
-                            ),
-                            "总共现": st.column_config.NumberColumn(
-                                "总共现次数", 
-                                help="与该方剂中其他药材的总共现次数"
-                            ),
-                            "最大共现": st.column_config.NumberColumn(
-                                "最大共现次数",
-                                help="与该方剂中某一药材的最大共现次数"
-                            ),
-                            "出现频次": st.column_config.NumberColumn(
-                                "出现频次",
-                                help="该药材在方剂中出现的次数"
-                            )
-                        }
-                        
-                        if '备注' in weights_df.columns:
-                            column_config["备注"] = "备注信息"
-                        
-                        st.dataframe(weights_df, column_config=column_config, hide_index=True)
-                        
-                        # 可视化
-                        valid_herbs = [h for h in herb_weights if h['总共现'] > 0]
-                        if valid_herbs:
-                            st.subheader("📊 药材共现关系可视化")
-                            
-                            viz_type = st.selectbox("选择图表类型", ["柱状图-总共现", "柱状图-平均共现"], key=f"viz_{i}")
-                            
-                            if "总共现" in viz_type:
-                                chart_data = pd.DataFrame({
-                                    '药材': [h['药材'] for h in valid_herbs],
-                                    '共现次数': [h['总共现'] for h in valid_herbs]
-                                })
-                                st.bar_chart(chart_data.set_index('药材'))
-                            else:
-                                chart_data = pd.DataFrame({
-                                    '药材': [h['药材'] for h in valid_herbs],
-                                    '平均共现': [h['平均共现'] for h in valid_herbs]
-                                })
-                                st.bar_chart(chart_data.set_index('药材'))
-                            
-                            # 显示共现关系网络
-                            st.subheader("🕸️ 药材共现关系网络")
-                            cooccur_pairs = []
-                            for j, herb1 in enumerate(herbs):
-                                for k, herb2 in enumerate(herbs):
-                                    if j < k and herb1 in cooccurrence_dict and herb2 in cooccurrence_dict[herb1]:
-                                        count = cooccurrence_dict[herb1][herb2]
-                                        if count > 0:
-                                            cooccur_pairs.append(f"{herb1} ↔ {herb2} (共现{count}次)")
-                            
-                            if cooccur_pairs:
-                                for pair in cooccur_pairs[:10]:  # 显示前10对
-                                    st.write(f"- {pair}")
-                            else:
-                                st.info("该方剂中的药材组合为新的共现关系")
-                        else:
-                            st.info("该方剂中的药材组合为新的共现模式")
-        
-        if prescription_count == 0:
-            st.warning("未找到对应的方剂信息")
+                # 药材分析
+                if len(prescription['herbs']) > 1:
+                    st.markdown("**药材组合分析:**")
+                    herb_pairs = list(itertools.combinations(prescription['herbs'], 2))
+                    st.write(f"- 共有 {len(herb_pairs)} 种药材组合")
+                    st.write(f"- 前3种组合: {', '.join(['+'.join(pair) for pair in herb_pairs[:3]])}")
+    else:
+        st.warning("该主症下暂无方剂信息")
 
 else:
-    # 初始状态
+    # 初始页面 - 显示系统概览
+    st.info("👈 请在左侧选择器官和主症开始查询")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📁 系统概览")
-        st.metric("证型数量", len(syndrome_df))
-        st.metric("药材种类", len(all_herbs))
-        st.metric("器官类型", len(organs))
+        st.subheader("📊 系统概览")
         
-        with st.expander("数据统计"):
-            st.write(f"- 总方剂数: {len(syndrome_df)}")
-            st.write(f"- 总药材数: {len(all_herbs)}")
-            st.write(f"- 共现关系数: {sum(len(v) for v in cooccurrence_dict.values()) // 2}")
-            
-            # 显示最常见的药材
-            herb_frequency = defaultdict(int)
-            for herb in all_herbs:
-                herb_frequency[herb] = sum(1 for v in cooccurrence_dict[herb].values() if v > 0)
-            
-            top_herbs = sorted(herb_frequency.items(), key=lambda x: x[1], reverse=True)[:5]
-            st.write("最常见药材:")
-            for herb, freq in top_herbs:
-                st.write(f"  - {herb}: {freq}次共现")
+        # 统计信息
+        total_organs = len(query_structure)
+        total_symptoms = sum(len(symptoms) for symptoms in query_structure.values())
+        total_prescriptions = 0
+        
+        # 计算总方剂数
+        for organ in query_structure.values():
+            for symptom in organ.values():
+                total_prescriptions += len(symptom['prescriptions'])
+        
+        st.metric("器官数量", total_organs)
+        st.metric("主症数量", total_symptoms)
+        st.metric("方剂总数", total_prescriptions)
+        
+        # 显示器官列表
+        with st.expander("📋 器官列表"):
+            for organ in organs:
+                symptom_count = len(query_structure[organ])
+                st.write(f"- **{organ}** ({symptom_count}个主症)")
     
     with col2:
         st.subheader("🎯 使用说明")
         st.markdown("""
-        ### 查询步骤：
-        1. **选择器官**（如：肺、脾）
-        2. **输入症状关键词**或选择主症  
-        3. **点击查询**查看推荐方剂
-        4. **查看药材共现权重**分析
+        ### 查询流程：
+        1. **选择器官** - 从左侧选择要查询的器官
+        2. **选择主症** - 选择具体的证型主症
+        3. **查看方剂** - 浏览推荐的经典方剂
         
         ### 系统特色：
-        - 🔬 **动态共现计算**：实时分析药材组合关系
-        - 📊 **多维度权重**：平均、总计、最大共现
-        - 🕸️ **关系网络**：显示药材间的关联强度
-        - 💡 **智能发现**：识别新的药材组合模式
+        - 🏗️ **层级结构** - 器官 → 主症 → 方剂 → 药材
+        - 📚 **多来源方剂** - 每个主症包含多个经典方剂
+        - 🔍 **智能搜索** - 支持症状关键词过滤
+        - 📊 **组合分析** - 分析药材配伍关系
         
-        💡 **共现权重**：基于所有方剂中药材同时出现的频率计算
+        ### 数据来源：
+        - 《伤寒论》、《温病条辨》等经典著作
+        - 历代名医经验方剂
+        - 现代临床应用方剂
         """)
+    
+    # 显示示例查询
+    st.subheader("✨ 快速查询示例")
+    example_cols = st.columns(3)
+    
+    examples = [
+        {"organ": "肺", "symptom": "风寒犯肺", "description": "咳嗽、白痰、畏寒"},
+        {"organ": "肺", "symptom": "风热犯肺", "description": "咳嗽、黄痰、发热"},
+        {"organ": "脾", "symptom": "脾气虚", "description": "食欲差、腹胀、乏力"}
+    ]
+    
+    for i, example in enumerate(examples):
+        if example["organ"] in query_structure and example["symptom"] in query_structure[example["organ"]]:
+            with example_cols[i]:
+                st.markdown(f"**{example['organ']} - {example['symptom']}**")
+                st.caption(example["description"])
+                if st.button("查看详情", key=f"example_{i}"):
+                    st.session_state.selected_organ = example["organ"]
+                    st.session_state.selected_symptom = example["symptom"]
+                    st.rerun()
 
 # 页脚
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <i>基于方剂内药材共现关系的智能推荐系统 | 单文件动态计算版本</i>
+    <i>中医方剂智能查询系统 | 基于器官-主症-方剂-药材层级结构</i>
 </div>
 """, unsafe_allow_html=True)
