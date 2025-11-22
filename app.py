@@ -16,7 +16,7 @@ st.set_page_config(
 st.title("🌿 中医方剂药材共现权重查询系统")
 st.markdown("基于CSV格式数据的智能方剂推荐")
 
-# 读取CSV数据
+# 读取CSV数据并自动检测列名
 @st.cache_data
 def load_csv_data():
     try:
@@ -26,12 +26,9 @@ def load_csv_data():
         # 读取药材共现矩阵
         cooccurrence_df = pd.read_csv("药材共现矩阵.csv")
         
-        # 处理列名 - 检查并重命名第一列
-        if cooccurrence_df.columns[0] == 'Unnamed: 0':
-            cooccurrence_df = cooccurrence_df.rename(columns={'Unnamed: 0': '药材'})
-        elif '药材' not in cooccurrence_df.columns:
-            # 如果第一列不是'药材'，但包含药材名，重命名它
-            cooccurrence_df = cooccurrence_df.rename(columns={cooccurrence_df.columns[0]: '药材'})
+        # 显示列名信息用于调试
+        st.sidebar.info(f"辨证数据列: {list(syndrome_df.columns)}")
+        st.sidebar.info(f"药材矩阵列: {list(cooccurrence_df.columns)}")
         
         return syndrome_df, cooccurrence_df
         
@@ -41,11 +38,24 @@ def load_csv_data():
         **请确保以下CSV文件存在于当前目录：**
         - 肺部辩证与经典方 2.csv
         - 药材共现矩阵.csv
-        """)
+        
+        **当前目录文件：**
+        """ + "\n".join([f"- {f}" for f in os.listdir('.') if f.endswith('.csv')]))
         return None, None
     except Exception as e:
         st.error(f"数据加载失败: {e}")
         return None, None
+
+# 自动检测列名函数
+def detect_column_names(df, possible_names):
+    """
+    自动检测数据框中的列名
+    """
+    for name in possible_names:
+        if name in df.columns:
+            return name
+    # 如果没有找到，返回第一个列名
+    return df.columns[0] if len(df.columns) > 0 else None
 
 # 加载数据
 syndrome_df, cooccurrence_df = load_csv_data()
@@ -53,14 +63,29 @@ syndrome_df, cooccurrence_df = load_csv_data()
 if syndrome_df is None or cooccurrence_df is None:
     st.stop()
 
+# 自动检测列名
+organ_col = detect_column_names(syndrome_df, ['器官', 'Organ', 'organ', '脏器'])
+symptom_col = detect_column_names(syndrome_df, ['主症', '症状', 'Symptom', 'symptom', '证型'])
+exterior_interior_col = detect_column_names(syndrome_df, ['表里', '表里辨证', 'Exterior_Interior'])
+cold_heat_col = detect_column_names(syndrome_df, ['寒热', '寒热辨证', 'Cold_Heat'])
+deficiency_excess_col = detect_column_names(syndrome_df, ['虚实', '虚实辨证', 'Deficiency_Excess'])
+pathogenesis_col = detect_column_names(syndrome_df, ['病机', 'Pathogenesis', '病机分析'])
+treatment_principle_col = detect_column_names(syndrome_df, ['治疗原则', '治疗原则', 'Treatment_Principle'])
+
+# 显示检测到的列名
+st.sidebar.success(f"检测到器官列: {organ_col}")
+st.sidebar.success(f"检测到主症列: {symptom_col}")
+
 # 数据预处理 - 构建共现字典
 try:
     cooccurrence_dict = {}
+    herb_col = detect_column_names(cooccurrence_df, ['药材', 'Herb', 'herb', '中药', '药物'])
+    
     for _, row in cooccurrence_df.iterrows():
-        herb = row['药材']
+        herb = row[herb_col]
         cooccurrence_dict[herb] = {}
-        for other_herb in cooccurrence_df.columns[1:]:  # 跳过'药材'列
-            if other_herb in row:
+        for other_herb in cooccurrence_df.columns:
+            if other_herb != herb_col and other_herb in row:
                 cooccurrence_dict[herb][other_herb] = row[other_herb]
     
     st.success("✅ 数据加载成功！")
@@ -73,12 +98,16 @@ except Exception as e:
 st.sidebar.header("🔍 查询条件")
 
 # 器官选择
-organs = syndrome_df['器官'].unique()
-selected_organ = st.sidebar.selectbox("选择器官", organs)
+try:
+    organs = syndrome_df[organ_col].unique()
+    selected_organ = st.sidebar.selectbox("选择器官", organs)
+except KeyError as e:
+    st.error(f"找不到器官列 '{organ_col}'，可用列: {list(syndrome_df.columns)}")
+    st.stop()
 
 # 根据器官筛选主症
-organ_syndromes = syndrome_df[syndrome_df['器官'] == selected_organ]
-main_symptoms = organ_syndromes['主症'].unique()
+organ_syndromes = syndrome_df[syndrome_df[organ_col] == selected_organ]
+main_symptoms = organ_syndromes[symptom_col].unique()
 
 # 症状输入
 symptom_input = st.sidebar.text_input("输入症状关键词", placeholder="例如：咳嗽、黄痰、发热")
@@ -92,48 +121,80 @@ if symptom_input:
             matched_syndromes.append(syndrome)
     
     if matched_syndromes:
-        selected_syndrome = st.sidebar.selectbox("匹配到的主症", matched_syndromes)
+        selected_symptom = st.sidebar.selectbox("匹配到的主症", matched_syndromes)
     else:
-        selected_syndrome = st.sidebar.selectbox("选择主症", main_symptoms)
+        selected_symptom = st.sidebar.selectbox("选择主症", main_symptoms)
 else:
-    selected_syndrome = st.sidebar.selectbox("选择主症", main_symptoms)
+    selected_symptom = st.sidebar.selectbox("选择主症", main_symptoms)
 
 # 查询按钮
 if st.sidebar.button("🔎 查询方剂", type="primary"):
     # 获取匹配的方剂信息
-    matched_prescriptions = organ_syndromes[organ_syndromes['主症'] == selected_syndrome]
+    matched_prescriptions = organ_syndromes[organ_syndromes[symptom_col] == selected_symptom]
     
     if not matched_prescriptions.empty:
-        st.header(f"📋 查询结果：{selected_organ} - {selected_syndrome}")
+        st.header(f"📋 查询结果：{selected_organ} - {selected_symptom}")
         
         # 显示八纲辨证信息
         syndrome_info = matched_prescriptions.iloc[0]
         col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("表里", syndrome_info['表里'])
-        with col2:
-            st.metric("寒热", syndrome_info['寒热'])
-        with col3:
-            st.metric("虚实", syndrome_info['虚实'])
-        with col4:
-            st.metric("病机", syndrome_info['病机'])
         
-        st.markdown(f"**治疗原则：** {syndrome_info['治疗原则']}")
+        with col1:
+            if exterior_interior_col in syndrome_info:
+                st.metric("表里", syndrome_info[exterior_interior_col])
+            else:
+                st.metric("表里", "未知")
+        
+        with col2:
+            if cold_heat_col in syndrome_info:
+                st.metric("寒热", syndrome_info[cold_heat_col])
+            else:
+                st.metric("寒热", "未知")
+        
+        with col3:
+            if deficiency_excess_col in syndrome_info:
+                st.metric("虚实", syndrome_info[deficiency_excess_col])
+            else:
+                st.metric("虚实", "未知")
+        
+        with col4:
+            if pathogenesis_col in syndrome_info:
+                st.metric("病机", syndrome_info[pathogenesis_col])
+            else:
+                st.metric("病机", "未知")
+        
+        if treatment_principle_col in syndrome_info:
+            st.markdown(f"**治疗原则：** {syndrome_info[treatment_principle_col]}")
         
         # 显示方剂和药材
         st.subheader("💊 推荐方剂及药材")
         
-        # 遍历所有方剂列
+        # 自动检测药材列
+        herb_columns = []
+        source_columns = []
+        
+        for col in syndrome_df.columns:
+            if '药材' in col or 'Herb' in col or 'herb' in col:
+                herb_columns.append(col)
+            elif '来源' in col or 'Source' in col or '方剂' in col:
+                source_columns.append(col)
+        
+        # 如果没有自动检测到，使用默认的列名模式
+        if not herb_columns:
+            herb_columns = [f'药材{i}' for i in range(1, 5)]
+        if not source_columns:
+            source_columns = [f'来源{i}' for i in range(1, 5)]
+        
+        # 遍历所有检测到的药材列
         prescription_count = 0
-        for i in range(1, 5):  # 假设最多4个方剂
-            prescription_col = f'药材{i}'
-            source_col = f'来源{i}'
-            
-            if prescription_col in syndrome_info and pd.notna(syndrome_info[prescription_col]):
+        for i, (herb_col, source_col) in enumerate(zip(herb_columns, source_columns)):
+            if herb_col in syndrome_info and pd.notna(syndrome_info[herb_col]):
                 prescription_count += 1
                 
-                with st.expander(f"方剂 {prescription_count}: {syndrome_info[source_col] if pd.notna(syndrome_info.get(source_col)) else '经典方剂'}", expanded=True):
-                    herbs_text = str(syndrome_info[prescription_col])
+                source_name = syndrome_info[source_col] if source_col in syndrome_info and pd.notna(syndrome_info.get(source_col)) else f"方剂 {prescription_count}"
+                
+                with st.expander(f"方剂 {prescription_count}: {source_name}", expanded=True):
+                    herbs_text = str(syndrome_info[herb_col])
                     
                     # 解析药材（处理顿号、逗号分隔）
                     herbs = []
@@ -233,6 +294,7 @@ if st.sidebar.button("🔎 查询方剂", type="primary"):
         
         if prescription_count == 0:
             st.warning("未找到对应的方剂信息")
+            st.info(f"可用的药材列: {herb_columns}")
     
     else:
         st.error("未找到匹配的证型信息")
@@ -251,8 +313,10 @@ else:
         with st.expander("数据预览"):
             tab1, tab2 = st.tabs(["辨证数据", "药材矩阵"])
             with tab1:
+                st.write("辨证数据列名:", list(syndrome_df.columns))
                 st.dataframe(syndrome_df.head(3))
             with tab2:
+                st.write("药材矩阵列名:", list(cooccurrence_df.columns))
                 st.dataframe(cooccurrence_df.head(3))
     
     with col2:
@@ -264,32 +328,26 @@ else:
         3. **点击查询**查看推荐方剂
         4. **查看药材共现权重**分析
         
-        ### 功能特色：
-        - 📊 **智能权重计算**：基于药材共现频率
-        - 🔍 **症状匹配**：关键词自动匹配主症
-        - 📈 **数据可视化**：多种图表展示权重
-        - 💊 **多方案推荐**：显示多个经典方剂
+        ### 检测到的列名：
+        - **器官列**: `{organ_col}`
+        - **主症列**: `{symptom_col}`
+        - **表里列**: `{exterior_interior_col}`
+        - **寒热列**: `{cold_heat_col}`
+        - **虚实列**: `{deficiency_excess_col}`
         
         💡 **共现权重说明**：基于药材在历史方剂中同时出现的频率计算，权重越高表示药材组合越常见。
-        """)
-    
-    # 显示特色功能
-    st.subheader("✨ 系统特色")
-    features = st.columns(3)
-    with features[0]:
-        st.markdown("**🔬 数据驱动**")
-        st.markdown("基于真实药材共现矩阵，科学计算权重")
-    with features[1]:
-        st.markdown("**🌐 全面覆盖**")
-        st.markdown("涵盖肺、脾等多个器官的辨证论治")
-    with features[2]:
-        st.markdown("**💡 智能推荐**")
-        st.markdown("根据症状自动匹配最相关方剂")
+        """.format(
+            organ_col=organ_col,
+            symptom_col=symptom_col,
+            exterior_interior_col=exterior_interior_col,
+            cold_heat_col=cold_heat_col,
+            deficiency_excess_col=deficiency_excess_col
+        ))
 
 # 页脚
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <i>基于中医经典方剂与药材共现矩阵的智能推荐系统 | CSV格式数据版本</i>
+    <i>基于中医经典方剂与药材共现矩阵的智能推荐系统 | 自动列名检测版本</i>
 </div>
 """, unsafe_allow_html=True)
